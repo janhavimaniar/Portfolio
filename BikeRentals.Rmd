@@ -1,0 +1,493 @@
+---
+title: "Bike Rentals"
+author: "Janhavi Mainar"
+date: "2024-04-10"
+output: html_document
+---
+
+```{r,include=FALSE}
+library(tidyverse)
+library(patchwork)
+library(MASS)
+```
+
+# Business Problem
+
+Many cities and towns now provide locked bikes throughout their
+neighborhoods.
+Customers sign-up for a sharing contract and they are able to
+pick up a bike in one location, and ride it to a different 
+location to return it.
+You have been hired to help a town understand when are customers
+using the bikes.
+The town administration would like to create a model that will
+predict the number of bikes used in a given hour and the locations
+that the bikes are moving from and to.
+
+The town's Information Technology department has prepared a
+data set for you.
+The data dictionary is provided below.
+This is the only data you have available for your analysis.
+
+
+## Data Dictionary
+
+| Variable        | Description                                               |
+|:--------------- |:----------------------------------------------------------|
+| season.code     | Season (1 = Winter, 2 = Spring, 3 = Summer, 4 = Fall) |
+| year.code       | Year indicator (0 = 2011, 1 = 2012) |
+| hour            | Hour (integer 0 to 23) |
+| holiday.code    | Indicator of holiday (0 = No, 1 = Yes) |
+| weekday.code    | Day of the week (0 = Sunday, 1 = Monday, ..., 6 = Saturday) |
+| weathersit.code | Weather situation (1 = Clear/Partly Cloudy, 2 = Mist, 3 = Rain or Snow) |
+| temp            | Normalized temperature in Celsius. [(t - t_min)/(t_max - t_min), t_min = -9, t_max = 39] |
+| humidity        | Normalized humidity. Values are divided by 100 (max possible) |
+| windspeed       | Normalized wind speed. Values are divided by 67 (max possible) |
+| bikes           | Count of rental bikes in each hour |
+
+
+## Task 0 
+
+Read the data and provide appropriate types to the
+variables in the data set.
+
+*****
+
+```{r}
+
+# Read in dataset
+db <- read_csv("./ma380-pr02-bike-sharing.csv",
+               col_types = "iiiiiidddi")
+
+# Create a categorical hour variable
+db$hour_cat <- as.factor(ifelse(db$hour >= 5 & db$hour <= 12, "Morning",
+                      ifelse(db$hour > 12 & db$hour <= 17, "Afternoon",
+                             ifelse(db$hour > 17 & db$hour <= 21, "Evening","Night"))))
+
+# Create a categorical temp variable
+db$temp_cat <- as.factor(ifelse(db$temp <= 0.33, "Low",
+                      ifelse(db$temp > 0.33 & db$temp <= 0.66, "Mid", "High")))
+
+# Create a categorical humidity variable
+db$humidity_cat <- as.factor(ifelse(db$humidity <= 0.33, "Low",
+                      ifelse(db$humidity > 0.33 & db$humidity <= 0.66, "Mid", "High")))
+
+# Create a categorical windspeed variable
+db$windspeed_cat <- as.factor(ifelse(db$windspeed <= 0.30, "Low",
+                      ifelse(db$windspeed > 0.33 & db$windspeed <= 0.60, "Mid", "High")))
+
+```
+
+I decided to create four new variables that categorized hour, temperature, humidity, and wind speed. Observing each individual hour seemed inefficient and would not provide useful insights. Classifying hours by the time of day provides a more generalized variable. For temperature, humidity, and wind speed, each variable in the given dataset was normalized and calculated in a unique way. To make better observations from these variables, changing them to categorical made them easier to understand. 
+
+*****
+
+## Task 1 
+
+Assess whether or not the data you have will help you
+address the business problem that the town is facing.
+
+*****
+
+The two primary concerns of the town's administration are regarding the predicted number of bikes used per hour and the locations the bikes are moving to and from. The dataset provided is adequate for gaining insight into the times and days at which bikes are used. Utilizing variables such as hour and weekday.code, we can get a better understanding of times or days when bike usage is higher or lower. Additionally, it can also provide details on the usage of bikes under different weather conditions using the temperature, humidity, and wind speed variables. This adds another layer of accuracy when it comes to predicting the demand for rental bikes. This dataset, however, lacks sufficient variables for assessing the locations that bikes are moving to and from. There are no variables that describe where a bike was picked up from or where it was dropped off, so that concern will require further information not included in this dataset. 
+
+*****
+
+## Task 2 
+
+Which variables should be treated as categorical?
+
+*****
+
+There are six variables in the dataset that should be treated as categorical: `season.code`, `year.code`, `hour`, `holiday.code`, `weekday.code`, and `weathersit.code`. Each of these variables is comprised of a range of numbers that represent a group or category, rather than a continuous measure. Even though a new categorical variable has been created for `hour` already, it is still not a continuous variable and must be treated as categorical. Treating these variables as categorical variables will provide more accurate insights. 
+
+```{r}
+
+# Change variable types
+db$season.code <- as.factor(db$season.code)
+db$year.code <- as.factor(db$year.code)
+db$hour <- as.factor(db$hour)
+db$holiday.code <- as.factor(db$holiday.code)
+db$weekday.code <- as.factor(db$weekday.code)
+db$weathersit.code <- as.factor(db$weathersit.code)
+
+```
+
+*****
+
+## Task 3 
+
+Create a new variable called `workday` with values of `Yes`
+if the day is indeed a workday and `No` if it is either a
+weekend or a holiday.
+Describe one advantage and one disadvantage in including
+`workday` in your model.
+
+*****
+
+```{r}
+
+# Create new variable
+db$workday <- as.factor(ifelse(db$weekday.code == 0 | db$weekday.code == 6 | db$holiday.code == 1, "No", "Yes"))
+summary(db)
+
+```
+
+One advantage of including the `workday` variable in the model is that it helps predict more accurate patterns of bike usage by separating the work days from the days off. This can be useful for forecasting behavior and demand when planning how to best distribute the bikes. For example, we may find that bike usage on the workdays is primarily for commuting to work, while on non-workdays they are used for recreational activities. These differences in demand can also translate to differences in hours of usage.  
+
+One disadvantage of the `workday` variable is that it may introduce multi-collinearity into the dataset and the predictive model. Multi-collinearity occurs when variables are highly correlated with each other, implying that they measure almost the same information. Because `workday` is so similar to the variables `holiday.code` and `weekday.code`, it could lead to higher standard errors of the coefficient estimates and decrease the accuracy of the model. 
+
+*****
+
+## Task 4 
+
+Conduct an exploratory data analysis on the information you
+have available with a focus on answering some of the key
+questions that the town's administration has.
+
+*****
+
+```{r}
+
+# Boxplot Average Bikes vs. Hour by Workday
+ggplot(data = db,
+       mapping = aes(x = hour, y = bikes, fill = workday)) +
+  geom_bar(stat = "summary", fun = "mean") +
+  labs(title = "Average Bikes per Hour",
+       x = "Hour of Day",
+       y = "Average Rental Bikes",
+       fill = "Workday")
+
+```
+This barplot shows the average number of bikes rented for each hour of the day. It also provides an insight into how the averages differ for workdays and non-workdays. Based on the plot, we can observe that certain times of the day have a greater demand for bikes, primarily around 8AM and 5-6PM. Additionally, we can see that demand is typically lower on work days than on non workdays. This graph indicates that the hour of the day and type of day do have an impact on the number of bikes that get rented. 
+
+```{r}
+
+ggplot(data = db,
+            mapping = aes(x = humidity_cat, y = bikes)) +
+ geom_boxplot(fill = c("lightblue", "coral", "lightgreen")) +
+  labs(title = "Rented Bikes by Humidity Level",
+       x = "Humidity Level",
+       y = "Bikes")
+
+```
+The boxplot shows the differences in number of bikes rented for each humidity level. We can observe that the average number of bikes rented in lowest in high humidity and highest in low humidity. This indicates that people prefer to bike in low humidity weather and tend to avoid it during high humidity. 
+
+```{r}
+
+# Scatterplot Temperature vs. Bikes
+p <- ggplot(data = db,
+       mapping = aes(x = temp, y = bikes, color = hour_cat)) +
+  geom_point() +
+  labs(title = "Rented Bikes vs. Temperature by Time of Day",
+       x = "Temperature",
+       y = "Bikes",
+       color = "Time of Day")
+
+p
+
+```
+This scatterplot visualizes the relationship between temperature and number of rented bikes based on the time of day. From the plot, we can make the assumption that bike usage is the highest when temperatures are in the 0.60 - 0.80 range. Lower temperatures lead to low bike usage. Furthermore, afternoons and evenings are the most popular times for bike usage, though mornings are also pretty popular. This plot informs us that there is a strong relationships between this variables and should be explored further. 
+
+*****
+
+## Task 5 
+
+Explore the **mean-variance** relationship for the number of 
+bikes rented per hour.
+Provide a bivariate plot showing this relationship.
+
+*****
+
+```{r}
+
+# Mean Variance
+tb <- db |>
+  group_by(hour) |>
+  summarize(sz = n(),
+           mn = mean(bikes),
+           vr = var(bikes))
+
+
+ggplot(data = tb,
+       mapping = aes(x = mn,
+                     y = vr)) +
+  geom_point() +
+  labs(title = "Mean-Variance Plot",
+       x = "Mean Number of Bikes",
+       y = "Variance of Number of Bikes")
+
+```
+The calculated mean-variance relationship for number of bikes rented per hour yields a parabolic plot. Based on this, a Poisson distribution is unlikely to be suitable for building this generalized model because it has a mean variance function where the two values are equal to each other. Therefore, its mean-variance plot should portray a linear graph with a slope of 1, which is not present above. 
+
+A Negative-Binomial distribution would work for this relationship. The mean-variance function for this distribution is $V(\mu) = \mu + k \cdot \mu^2$, which should reveal a parabola when plotted. The mean-variance plot above follows this trend, indicating a good fit. Additionally, the plot indicates towards overdispersion as variance increases much faster than the mean. A Negative Binomial distribution would accountn for this overdispersion, which again shows that it is well-suited.
+
+A Gamma distribution would not work for this mean-variance relationship as it has a mean-variance function of $V(\mu) = \mu^2$. This distribution requires the variance to increase faster than the mean, but not necessarily in the parabolic shape shown above. Additionally, the plot above seems to indicate towards overdispersion and non-linearity, which Gamma distributions are typically not the best suited for. 
+
+*****
+
+## Task 6 
+
+Based on your responses to the previous tasks select an
+initial model (write it down here) and then search for a 
+good model of the number of bikes rented each hour.
+Select your final model and perform a thorough diagnostic 
+analysis.
+
+*****
+
+```{r}
+
+# Create the initial model
+initial.mod <- glm.nb(bikes ~ hour_cat + temp,
+              data = db,
+              link = "log")
+
+summary(initial.mod)
+
+```
+
+
+The initial model I chose is as follows:
+
+$$ log(\mathbb{E}[{Bikes}]) = 4.59 - 0.028(\text{Evening}) - 0.302(\text{Morning}) - 1.657(\text{Night}) + 1.939(\text{Temperature}) $$
+
+```{r}
+
+# Create new variable - temp squared
+db$temp.sq = (db$temp)^2
+
+# Create model
+mod <- glm.nb(bikes ~ hour_cat + temp + temp.sq + humidity_cat,
+              data = db,
+              link = "log")
+
+summary(mod)
+
+
+#Create predictions
+df <- expand_grid(hour_cat = factor(c("Morning", "Afternoon", "Evening", "Night")),
+                  temp = seq(0, 1, length = 40),
+                  humidity_cat = factor(c("Low", "Mid", "High")))
+
+df$temp.sq = (df$temp)^2
+
+df <- df |>
+  mutate(mod.mu = predict(mod,
+                          newdata = df,
+                          type = "response"))
+
+
+# Plot predictions
+p + geom_line(data = df |> filter(hour_cat == "Morning", humidity_cat == "Low"),
+                   mapping = aes(x = temp,
+                                 y = mod.mu),
+              linewidth = 1.0) + 
+  geom_line(data = df |> filter(hour_cat == "Morning", humidity_cat == "Mid"),
+                   mapping = aes(x = temp,
+                                 y = mod.mu),
+              linewidth = 1.0) +
+  geom_line(data = df |> filter(hour_cat == "Morning", humidity_cat == "High"),
+                   mapping = aes(x = temp,
+                                 y = mod.mu),
+              linewidth = 1.0) +
+  geom_line(data = df |> filter(hour_cat == "Afternoon", humidity_cat == "Low"),
+                   mapping = aes(x = temp,
+                                 y = mod.mu),
+              linewidth = 1.0) + 
+  geom_line(data = df |> filter(hour_cat == "Afternoon", humidity_cat == "Mid"),
+                   mapping = aes(x = temp,
+                                 y = mod.mu),
+              linewidth = 1.0) +
+  geom_line(data = df |> filter(hour_cat == "Afternoon", humidity_cat == "High"),
+                   mapping = aes(x = temp,
+                                 y = mod.mu),
+              linewidth = 1.0) +
+  geom_line(data = df |> filter(hour_cat == "Evening", humidity_cat == "Low"),
+                   mapping = aes(x = temp,
+                                 y = mod.mu),
+              linewidth = 1.0) + 
+  geom_line(data = df |> filter(hour_cat == "Evening", humidity_cat == "Mid"),
+                   mapping = aes(x = temp,
+                                 y = mod.mu),
+              linewidth = 1.0) + 
+  geom_line(data = df |> filter(hour_cat == "Evening", humidity_cat == "High"),
+                   mapping = aes(x = temp,
+                                 y = mod.mu),
+              linewidth = 1.0) +
+  geom_line(data = df |> filter(hour_cat == "Night", humidity_cat == "Low"),
+                   mapping = aes(x = temp,
+                                 y = mod.mu),
+              linewidth = 1.0) +
+   geom_line(data = df |> filter(hour_cat == "Night", humidity_cat == "Mid"),
+                   mapping = aes(x = temp,
+                                 y = mod.mu),
+              linewidth = 1.0) + 
+  geom_line(data = df |> filter(hour_cat == "Night", humidity_cat == "High"),
+                   mapping = aes(x = temp,
+                                 y = mod.mu),
+              linewidth = 1.0) 
+
+```
+
+```{r}
+
+library(patchwork)
+
+# Run diagnostic on model
+db <- db |>
+  mutate(fm.eta = predict(mod, type = "link"),
+         fm.mu  = predict(mod, type = "response"),
+         fm.rD  = resid(mod, type = "deviance"),
+         fm.wR  = fm.eta + resid(mod, type = "working"))
+
+# Fitted values vs. deviance residuals
+p1 <- ggplot(data = db,
+             mapping = aes(x = fm.mu,
+                           y = fm.rD)) +
+  geom_point() + geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Fitted Values",
+       y = "Deviance Residuals")
+
+# Fitted values vs. absolute value deviance residuals
+p2 <- ggplot(data = db,
+             mapping = aes(x = fm.mu,
+                           y = abs(fm.rD))) +
+  geom_point() + geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Fitted Values",
+       y = "|Deviance Residuals|")
+
+#Linear predictor vs working response
+p3 <- ggplot(data = db,
+             mapping = aes(x = fm.wR,
+                           y = fm.eta)) +
+  geom_point() + geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Working Response",
+       y = "Linear Predictor")
+
+#Predictor variable vs deviance residuals
+p4 <- ggplot(data = db,
+             mapping = aes(x = temp,
+                           y = fm.rD)) +
+  geom_point() + geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Temperature (normalized)",
+       y = "Deviance Residuals")
+
+(p1 + p2)/(p3 + p4)
+```
+
+The diagnostic analysis provides an insight into how well the predicted model fits the data. The top left plot shows Deviance Residuals vs. Fitted Values, which looks for outliers in the model. The plot shows a random cloud of points with no particular pattern and the line is almost flat, indicating a good model. Next is the absolute value of Deviance Residuals vs. the Fitted Values plot, which assesses the distribution of residuals across a range of fitted values. Like the first plot, this should also depict a random cloud of points with a flat line. For this model, there is a slight negative slope which indicates a possible pattern in the residuals. However, the slope is small and therefore permissible. The Linear Predictor vs. Working Response plot informs us whether the right link function is utilized and evaluates the linearity of the model by showing a linear line. In this model, although a linear line is shown, we can see that the points do not necessarily follow the same pattern. This indicates that the link function used (log) may not be the best. After considering alternative options, such as "inverse" and "identity", I found that the "log" link in the best for the given model and decided to keep it. The final plot is Deviance Residuals vs. Age, which looks to identify influential predictor observations. Again, since the points are distributed randomly and the line is flat, the plot is satisfactory. Overall, the model looks good which makes it adequate to use for predictions. 
+
+The final model is represented as:
+
+$$ log(\mathbb{E}[{Bikes}]) = 3.45 - 0.004(\text{Evening}) - 0.21(\text{Morning}) - 1.57(\text{Night}) + 6.10(\text{Temperature}) - 4.17(\text{Temperature^2}) + 0.32(\text{Low Humidity}) + 0.33(\text{Mid Humidity})$$
+where the response variable is the number of bikes rented, `Evening`, `Morning`, and `Night` are yes/no variables for the time of day, `Temperature` is the normalized temperature value, `Temperature^2` is the temperature value raised to the second power, and `Low Humidity` and `High Humidity` are also yes/no variables for the humidity. 
+
+It is important to note: the prediction lines for "Afternoon" (organge) are difficult to see in the plot because they are located behind the "Evening" (green) lines. Careful inspection of the plot reveals this.
+
+The initial model had failed to properly capture the data because it created a model with exponential predictions, which is not the shape of the given data. This final model better captures the downward parabolic trend seen the in the data and therefore yields more accurate predictions than the initial model. 
+
+*****
+
+## Task 7 (16 points)
+
+For a general audience interpret your final model from the
+previous task.
+
+*****
+
+The final model is comprised of four explanatory variables: the hour category, the temperature, the temperature value squared, and the humidity category to predict the number of bikes rented. The intercept value tells us that on an afternoon with high humidity and a temperature equal to 0, the number of bikes rented is approximately 31 ($ e^{3.44}$). The model also tells us the relationships between each individual variable and the number of bikes rented, holding all other variables constant. For temperature, the model predicts that for every one unit increase in the temperature, and holding all other variables constant, the number of bikes rented increases by the multiplicative factor of 445.9 ($ e^{6.10}$). While the temperature squared variable does offer an estimated coefficient, it is redundant to interpret the value because it is based on the temperature variable and the interpretation would give no useful insight. For the categorical variables: hour category and humidity category, the interpretations are based on a baseline value. So, holding all other variables constant, the model predicts that during the evening, the number of bikes rented increases by a multiplicative factor of 0.99 ($ e^{-0.004}$) compared to the number of bikes rented in the afternoon. Similarly for morning and night, holding all other variables constant, the number of bikes rented increases by a multiplicative factor of 0.81 ($ e^{-0.21}$) and 0.21 ($ e^{-1.57}$), respectively, compared to the number of bikes rented in the afternoon. Moving to the humidity category variables, the baseline is high humidity. In low humidity, holding all other variables constant, the number of bikes rented increases by a multiplicative factor of 1.38 ($ e^{0.32}$) compared to a day with high humidity. For a day with medium humidity, holding all other variables constant, the number of bikes rented increases by a multiplicative factor of 1.39 ($ e^{0.33}$) compared to high humidity. 
+
+*****
+
+## Task 8 (8 points)
+
+Some variables were not included in your final model.
+Select two of them and explain why you did not include
+them.
+Back up your argument with either a table or a graph.
+
+*****
+
+In evaluating the variables that worked best for my final model, I decided to exclude some of the variables given in the dataset, such as `windspeed_cat` and `holiday.code`. 
+
+The variable `windspeed_cat` is categorical and classifies the integer wind speed values into three groups: "Low", "Mid", and "High". As seen in the barplot below, the average number of bikes rented does not change with different wind speeds, demonstrating that wind speed does not greatly affect people from renting bikes. The only category that showed some deviation was the high windspeed group, which has a lower third quantile than the other boxplots. However, since there are much fewer records of high windspeed, and the averages remain around the same, it would be difficult and inefficient to use the variable in the final model.
+
+```{r}
+
+# Boxplot Windspeed Category
+ggplot(data = db,
+            mapping = aes(x = windspeed_cat, y = bikes)) +
+ geom_boxplot() +
+  labs(title = "Bike Rentals vs. Wind Speed",
+       y = "Number of Bikes",
+       x = "Wind Speed Category")
+
+```
+
+The `holiday.code` is a categorical variable that contains two values: 0 and 1, representing the whether the day was a holiday (1) or not (0). Similar to the wind speed category variable, the number of bikes rented did not vary much on holidays and non-holidays. The averages for both are close to each other and even the first and third quantiles do not deviate from one another. Due to this limited difference in bike rentals between the two options, I decided not to include `holiday.code` in my final model.
+
+```{r}
+
+# Boxplot Holiday Code
+ggplot(data = db,
+            mapping = aes(x = holiday.code, y = bikes)) +
+ geom_boxplot() +
+  labs(title = "Bike Rentals vs. Holiday",
+       y = "Number of Bikes",
+       x = "Holiday Category")
+
+```
+
+*****
+
+## Task 9 (50 points)
+
+Write a short summary of your findings that you would
+share with the town administrators.
+Be sure to address a general audience and to focus your
+recommendations on solving the business problem they 
+face.
+
+Your written comments should not exceed 750 words.
+You may include two graphs and/or tables to support
+your arguments.
+
+*****
+
+This analysis explored the different variables that can have an impact on the number of bikes rented. The given data provided a deep insight into the usage of bikes based on the time of day, the type of day, and the weather conditions. The two goals posed by the town for this study were to create a model that could predict the number of bikes used in a given hour and the locations that the bikes are moving from and to. With the given data, it was impossible to predict the location aspect of the problem and further information would be required for that. This study focuses on the first query of creating a predictive model for the number of bikes rented in a given hour. 
+
+To start, an initial visualization was created to observe the differences in bike usage by the hour. As seen below, there are obvious variations in the demand for bikes throughout the day, with a higher need around 8AM in the morning and again around 5-6PM in the afternoon. The shape of the distribution also indicates that, in general, bike usage is higher in the afternoon and evening times. Based on this observation, I would recommend staffing bike rental spots higher during these times to keep up with the demand. 
+
+```{r}
+
+# Boxplot Average Bikes vs. Hour
+ggplot(data = db,
+       mapping = aes(x = hour, y = bikes)) +
+  geom_bar(stat = "summary", fun = "mean") +
+  labs(title = "Average Bikes per Hour",
+       x = "Hour of Day",
+       y = "Average Rental Bikes")
+
+```
+
+Moving into the actual predictive model, careful exploration of the given variables revealed that the temperature, the time of day, and the humidity level had the greatest impact on the bike usage. The base plot used for this model is shown below, depicting the number of bikes versus the numerical temperature values and color-coordinated by the time of day. As we can see from the graph, the afternoon and evening times are more popular for bike rentals, along with some morning times. This reinforces the claims from the previous plot. Additionally, warmer temperatures, typically in the range of 0.60 to 0.80, have a higher demand as well. This demonstrates that people tend to enjoy utilizing bikes in pleasantly warm temperatures and during afternoon times. 
+
+```{r}
+
+# Scatterplot Temperature vs. Bikes
+ggplot(data = db,
+       mapping = aes(x = temp, y = bikes, color = hour_cat)) +
+  geom_point() +
+  labs(title = "Rented Bikes vs. Temperature by Time of Day",
+       x = "Temperature",
+       y = "Bikes",
+       color = "Time of Day")
+
+```
+
+The actual model also revealed that low levels of humidity increased the number of bikes rented by a multiplicative factor of 1.38 compared to high levels of humidity, holding all the other variables constant. This goes along with the temperature observation. Nicer weather leads to higher usage of bike rentals. Similarly, for evening, morning and nighttime, holding all other variables constant, the number of bikes rented increases by a multiplicative factor of 0.99, 0.81 and 0.21, respectively, compared to the number of bikes rented in the afternoon. This again highlights that evenings and mornings have the highest demands for bike rentals. 
+
+These insights are important to keep in mind when taking allocating resources to bike rental centers. Bike rentals are highest during early and later times and in nicer weather. By understanding the demand for bikes, the town can work to provide efficient service that helps people and the environment. 
+
+*****
